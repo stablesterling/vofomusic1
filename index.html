@@ -918,6 +918,8 @@ let currentPlaylist = [];
 let currentIndex = -1;
 let isPlaying = false;
 let currentSongData = null;
+let wakeLock = null;
+let isPlayerReady = false;
 
 // ============================================
 // AUTO MIX FEATURES
@@ -940,6 +942,87 @@ function showToast(message, type = 'info') {
         toast.classList.remove('show'); 
     }, 3500);
 }
+
+// ============================================
+// BACKGROUND AUDIO - Wake Lock
+// ============================================
+async function requestWakeLock() {
+    try {
+        if ('wakeLock' in navigator && !wakeLock) {
+            wakeLock = await navigator.wakeLock.request('screen');
+            console.log('💡 Wake lock acquired - screen will stay on');
+        }
+    } catch (err) {
+        console.log('⚠️ Wake lock not available:', err);
+    }
+}
+
+function releaseWakeLock() {
+    if (wakeLock) {
+        try {
+            wakeLock.release();
+            wakeLock = null;
+            console.log('💤 Wake lock released');
+        } catch (err) {
+            console.log('⚠️ Error releasing wake lock:', err);
+        }
+    }
+}
+
+// ============================================
+// BACKGROUND AUDIO - Visibility Change
+// ============================================
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        console.log('📱 Tab hidden - keeping audio playing');
+        // Request wake lock when tab is hidden to prevent screen sleep
+        if (isPlaying) {
+            requestWakeLock();
+        }
+    } else {
+        console.log('📱 Tab visible');
+        // Release wake lock when tab is visible again
+        releaseWakeLock();
+        // If player exists and was playing but is paused, resume
+        if (player && isPlaying && player.getPlayerState) {
+            const state = player.getPlayerState();
+            if (state === YT.PlayerState.PAUSED) {
+                player.playVideo();
+            }
+        }
+    }
+});
+
+// ============================================
+// BACKGROUND AUDIO - Media Session API
+// ============================================
+if ('mediaSession' in navigator) {
+    // This helps keep audio playing in background on supported browsers
+    navigator.mediaSession.setActionHandler('play', () => {
+        if (player) {
+            player.playVideo();
+            requestWakeLock();
+        }
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+        if (player) {
+            player.pauseVideo();
+            releaseWakeLock();
+        }
+    });
+    navigator.mediaSession.setActionHandler('previoustrack', () => skipPrev());
+    navigator.mediaSession.setActionHandler('nexttrack', () => skipNext());
+}
+
+// ============================================
+// BACKGROUND AUDIO - Prevent Browser From Pausing
+// ============================================
+// Some browsers pause audio when the page is unloaded or hidden.
+// This helps prevent that.
+window.addEventListener('beforeunload', () => {
+    // Don't pause on unload - let it continue
+    return null;
+});
 
 // ============================================
 // INIT
@@ -988,11 +1071,15 @@ function onYouTubeIframeAPIReady() {
             controls: 0, 
             playsinline: 1,
             modestbranding: 1,
-            rel: 0
+            rel: 0,
+            audio: 1,  // Audio-only mode for better mobile performance
+            enablejsapi: 1
         },
         events: {
             onReady: () => {
                 player.setVolume(70);
+                isPlayerReady = true;
+                console.log('🎵 YouTube player ready');
             },
             onStateChange: (e) => {
                 const playBtn = document.getElementById('playBtn');
@@ -1002,21 +1089,29 @@ function onYouTubeIframeAPIReady() {
                     isPlaying = true;
                     playBtn.innerText = "||";
                     silentAudio.play().catch(() => {});
+                    // Request wake lock when playing
+                    requestWakeLock();
                 } else if (e.data === YT.PlayerState.PAUSED) {
                     isPlaying = false;
                     playBtn.innerText = "▶";
                     silentAudio.pause();
+                    // Release wake lock when paused
+                    releaseWakeLock();
                 } else if (e.data === YT.PlayerState.ENDED) {
                     isPlaying = false;
                     playBtn.innerText = "▶";
                     silentAudio.pause();
+                    releaseWakeLock();
                     // Auto play next song
-                    handleSongEnd();
+                    setTimeout(handleSongEnd, 500);
+                } else if (e.data === YT.PlayerState.BUFFERING) {
+                    console.log('⏳ Buffering...');
                 }
             },
-            onError: () => {
+            onError: (e) => {
+                console.error('YouTube error:', e);
                 showToast('⚠️ Unable to play this track', 'error');
-                // Try to play next on error
+                releaseWakeLock();
                 setTimeout(handleSongEnd, 3000);
             }
         }
@@ -1025,7 +1120,8 @@ function onYouTubeIframeAPIReady() {
 }
 
 // ============================================
-// AUTO MIX: HANDLE SONG END// ============================================
+// AUTO MIX: HANDLE SONG END
+// ============================================
 function handleSongEnd() {
     if (repeatMode === 'one') {
         // Repeat current song
@@ -1048,7 +1144,7 @@ function handleSongEnd() {
     }
     
     if (nextIndex >= 0 && nextIndex < currentPlaylist.length) {
-        playSong(nextIndex);
+        setTimeout(() => playSong(nextIndex), 500);
     }
 }
 
@@ -1100,7 +1196,6 @@ function toggleShuffle() {
         // Find current song in shuffled order
         const currentSongId = currentPlaylist[currentIndex]?.id;
         if (currentSongId) {
-            // If a song is playing, find it in shuffled array
             for (let i = 0; i < shuffledIndices.length; i++) {
                 if (currentPlaylist[shuffledIndices[i]]?.id === currentSongId) {
                     currentShuffleIndex = i;
@@ -1120,8 +1215,8 @@ function toggleShuffle() {
 // ============================================
 function toggleRepeat() {
     const modes = ['none', 'all', 'one'];
-    const currentIndex = modes.indexOf(repeatMode);
-    repeatMode = modes[(currentIndex + 1) % modes.length];
+    const currentIdx = modes.indexOf(repeatMode);
+    repeatMode = modes[(currentIdx + 1) % modes.length];
     
     const btn = document.getElementById('repeatBtn');
     const icons = {
@@ -1226,6 +1321,7 @@ function handleLogout() {
     setTimeout(() => {
         localStorage.removeItem('vofo_user');
         currentUser = null;
+        releaseWakeLock();
         location.reload();
     }, 500);
 }
@@ -1234,7 +1330,7 @@ function handleLogout() {
 // TRACK MANAGEMENT
 // ============================================
 function playSong(index) {
-    if (!player) {
+    if (!player || !isPlayerReady) {
         showToast('Player is loading...', 'info');
         return;
     }
@@ -1257,8 +1353,13 @@ function playSong(index) {
     document.getElementById('pThumb').src = song.thumbnail;
     document.getElementById('bg-blur').style.backgroundImage = `url('${song.thumbnail}')`;
     
-    player.loadVideoById(song.id);
-    checkIfLiked(song.id);
+    try {
+        player.loadVideoById(song.id);
+        checkIfLiked(song.id);
+    } catch (e) {
+        console.error('Error loading video:', e);
+        showToast('Error loading track', 'error');
+    }
 
     if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
@@ -1266,11 +1367,10 @@ function playSong(index) {
             artist: song.artist,
             artwork: [{ src: song.thumbnail, sizes: '512x512', type: 'image/jpeg' }]
         });
-        navigator.mediaSession.setActionHandler('play', () => togglePlay());
-        navigator.mediaSession.setActionHandler('pause', () => togglePlay());
-        navigator.mediaSession.setActionHandler('previoustrack', () => skipPrev());
-        navigator.mediaSession.setActionHandler('nexttrack', () => skipNext());
     }
+    
+    // Request wake lock when playing
+    requestWakeLock();
 }
 
 function togglePlay() {
@@ -1278,8 +1378,10 @@ function togglePlay() {
     const state = player.getPlayerState();
     if (state === YT.PlayerState.PLAYING) {
         player.pauseVideo();
+        releaseWakeLock();
     } else {
         player.playVideo();
+        requestWakeLock();
     }
 }
 
@@ -1719,6 +1821,7 @@ console.log('✦ VoFo Music Experience');
 console.log('🎵 Backend: ' + BACKEND_URL);
 console.log('👤 User: ' + (currentUser ? currentUser.username : 'Not logged in'));
 console.log('🔀 Auto Mix features enabled');
+console.log('📱 Background audio: Wake Lock + Media Session API enabled');
 </script>
 </body>
 </html>

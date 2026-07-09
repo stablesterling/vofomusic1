@@ -5,7 +5,7 @@ Deployment-ready for Render with PostgreSQL
 
 import os
 import logging
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime, Text, Boolean, func
@@ -216,20 +216,37 @@ def get_db():
     finally:
         db.close()
 
+# ============================================
+# FIXED: get_current_user with Header support
+# ============================================
 async def get_current_user(
-    token: str = Query(None),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    if not token:
+    """
+    Get current user from Authorization header.
+    Supports both "Bearer <token>" format and direct token.
+    """
+    if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check if it's a Bearer token
+    if authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "").strip()
+    else:
+        # If no Bearer prefix, treat the whole string as token (for compatibility)
+        token = authorization.strip()
+    
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid token format")
     
     payload = decode_token(token)
     if not payload:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     
     user_id = payload.get("sub")
     if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Invalid token payload")
     
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -682,6 +699,5 @@ if __name__ == "__main__":
         "app:app",
         host="0.0.0.0",
         port=port,
-        reload=True
+        reload=False  # Set to False for production
     )
-  

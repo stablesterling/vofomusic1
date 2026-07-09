@@ -924,7 +924,6 @@ window.onload = () => {
                 document.getElementById('authScreen').classList.add('hidden');
                 document.getElementById('app').classList.remove('hidden');
                 fetchTrending();
-                // Verify token is valid
                 verifyToken();
             });
         } catch (e) {
@@ -942,7 +941,6 @@ async function verifyToken() {
     try {
         const response = await fetch(`${BACKEND_URL}/auth/me?token=${token}`);
         if (!response.ok) {
-            // Token expired or invalid
             localStorage.removeItem('vofo_user');
             localStorage.removeItem('vofo_token');
             token = null;
@@ -1283,13 +1281,13 @@ function renderTracks(tracks, target) {
     const container = document.getElementById(target);
     container.innerHTML = tracks.map((s, i) => `
         <div class="track" style="animation-delay: ${i * 0.05}s">
-            <img src="${s.thumbnail}" onerror="this.style.display='none'">
+            <img src="${escapeHtml(s.thumbnail)}" onerror="this.style.display='none'">
             <div class="track-meta" onclick='startPlaylist(${i})'>
                 <div>${escapeHtml(s.title)}</div>
                 <div>${escapeHtml(s.artist)}</div>
             </div>
             <div class="track-actions">
-                <button onclick="event.stopPropagation(); toggleFavorite('${s.id}')" id="fav_${s.id}" aria-label="Favorite">♡</button>
+                <button onclick="event.stopPropagation(); toggleFavorite('${escapeHtml(s.id)}', '${escapeHtml(s.title)}', '${escapeHtml(s.artist)}', '${escapeHtml(s.thumbnail)}')" id="fav_${escapeHtml(s.id)}" aria-label="Favorite">♡</button>
             </div>
         </div>
     `).join('');
@@ -1320,24 +1318,18 @@ function escapeHtml(text) {
 // ============================================
 // FAVORITES
 // ============================================
-async function toggleFavorite(songId) {
+async function toggleFavorite(songId, title, artist, thumbnail) {
     if (!currentUser || !token) {
         showToast('Sign in to favorite songs', 'error');
         return;
     }
     
     const btn = document.getElementById(`fav_${songId}`);
+    if (!btn) return;
+    
     const isFav = btn.classList.contains('liked');
     
     try {
-        // First get song details from current playlist
-        const tracks = window._currentTrackList || [];
-        const song = tracks.find(s => s.id === songId);
-        if (!song) {
-            showToast('Song not found', 'error');
-            return;
-        }
-        
         const response = await fetch(`${BACKEND_URL}/favorites${isFav ? `/${songId}` : ''}`, {
             method: isFav ? 'DELETE' : 'POST',
             headers: {
@@ -1346,9 +1338,9 @@ async function toggleFavorite(songId) {
             },
             body: isFav ? null : JSON.stringify({ 
                 song_id: songId, 
-                title: song.title, 
-                artist: song.artist,
-                thumbnail: song.thumbnail
+                title: title, 
+                artist: artist,
+                thumbnail: thumbnail
             })
         });
 
@@ -1360,6 +1352,11 @@ async function toggleFavorite(songId) {
             // Refresh library if open
             if (!document.getElementById('libraryTab').classList.contains('hidden')) {
                 fetchLiked();
+            }
+            
+            // Update current song like button if this is the currently playing song
+            if (currentSongData && currentSongData.id === songId) {
+                document.getElementById('likeBtn').classList.toggle('liked');
             }
         } else {
             const data = await response.json();
@@ -1474,7 +1471,6 @@ async function fetchLiked() {
         
         if (!response.ok) {
             if (response.status === 401) {
-                // Token expired
                 localStorage.removeItem('vofo_user');
                 localStorage.removeItem('vofo_token');
                 token = null;
@@ -1559,6 +1555,12 @@ document.getElementById('playerBar')?.addEventListener('touchmove', (e) => {
         e.preventDefault();
     }
 }, { passive: false });
+
+// Load YouTube API
+const tag = document.createElement('script');
+tag.src = "https://www.youtube.com/iframe_api";
+const firstScriptTag = document.getElementsByTagName('script')[0];
+firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
 console.log('✦ VoFo Music Experience');
 console.log('🎵 Backend: ' + BACKEND_URL);

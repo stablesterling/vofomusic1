@@ -6,7 +6,6 @@
     <title>VoFo Music | Private Listening</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
     <style>
-        /* ... all your existing CSS ... */
         :root { 
             --bg: #0a0a0a; 
             --gold: #c5a367; 
@@ -113,7 +112,7 @@
             to { opacity: 1; }
         }
         
-        /* AUTH UI - Updated with single input */
+        /* AUTH UI */
         .auth-container { 
             position: fixed; 
             inset: 0; 
@@ -780,7 +779,7 @@
     <div class="vofo-animated">VoFo</div>
 </div>
 
-<!-- Auth Screen - Single input -->
+<!-- Auth Screen -->
 <div id="authScreen" class="auth-container">
     <div id="loginForm" class="auth-card">
         <div class="auth-header">
@@ -789,6 +788,7 @@
             <div class="auth-sub">HIGH-FIDELITY · NO ADS · NO TRACKING</div>
         </div>
         <input type="text" id="lUser" placeholder="USERNAME" autocomplete="username" onkeypress="if(event.key==='Enter') handleAuth()">
+        <input type="password" id="lPass" placeholder="PASSWORD" autocomplete="current-password" onkeypress="if(event.key==='Enter') handleAuth()">
         <div id="authError" class="auth-error"></div>
         <button class="auth-btn" onclick="handleAuth()">Initialize</button>
         <p class="auth-switch" onclick="toggleAuth()">CREATE ACCOUNT</p>
@@ -989,15 +989,24 @@ function onYouTubeIframeAPIReady() {
 }
 
 // ============================================
-// AUTHENTICATION (Simplified - No JWT, No Password)
+// AUTHENTICATION (With Password)
 // ============================================
 async function handleAuth() {
     const u = document.getElementById('lUser').value.trim();
+    const p = document.getElementById('lPass').value;
     const authBtn = document.querySelector('.auth-btn');
     const errorDiv = document.getElementById('authError');
     
-    if(!u) {
-        errorDiv.textContent = 'Please enter a username';
+    if(!u || !p) {
+        errorDiv.textContent = 'Please enter both username and password';
+        return;
+    }
+    if(u.length < 3) {
+        errorDiv.textContent = 'Username must be at least 3 characters';
+        return;
+    }
+    if(p.length < 4) {
+        errorDiv.textContent = 'Password must be at least 4 characters';
         return;
     }
     errorDiv.textContent = '';
@@ -1007,7 +1016,10 @@ async function handleAuth() {
     
     try {
         const endpoint = isLoginMode ? '/auth/login' : '/auth/register';
-        const body = { username: u };
+        const body = { 
+            username: u,
+            password: p
+        };
 
         const response = await fetch(`${BACKEND_URL}${endpoint}`, {
             method: 'POST',
@@ -1051,6 +1063,7 @@ function toggleAuth() {
     authSwitch.innerText = isLoginMode ? "CREATE ACCOUNT" : "ALREADY HAVE AN ACCOUNT?";
     
     document.getElementById('lUser').value = '';
+    document.getElementById('lPass').value = '';
     document.getElementById('authError').textContent = '';
     document.getElementById('lUser').focus();
 }
@@ -1285,7 +1298,7 @@ function escapeHtml(text) {
 }
 
 // ============================================
-// FAVORITES (Simplified - No JWT)
+// FAVORITES (With Username-based Auth)
 // ============================================
 async function toggleFavorite(songId, title, artist, thumbnail) {
     if (!currentUser) {

@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateT
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
-from jose import jwt
+from jose import jwt, JWTError
 from ytmusicapi import YTMusic
 from pydantic import BaseModel, Field
 from typing import Optional, List
@@ -199,14 +199,23 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
+    # Set expiration
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    # Encode the token
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
 def decode_token(token: str) -> dict:
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except:
+        # Use the same SECRET_KEY and ALGORITHM
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError as e:
+        print(f"JWT Decode Error: {str(e)}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error decoding token: {str(e)}")
         return None
 
 def get_db():
@@ -216,9 +225,6 @@ def get_db():
     finally:
         db.close()
 
-# ============================================
-# FIXED: get_current_user with Header support
-# ============================================
 async def get_current_user(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
@@ -228,30 +234,38 @@ async def get_current_user(
     Supports both "Bearer <token>" format and direct token.
     """
     if not authorization:
+        print("❌ No Authorization header provided")
         raise HTTPException(status_code=401, detail="Not authenticated")
     
     # Check if it's a Bearer token
     if authorization.startswith("Bearer "):
         token = authorization.replace("Bearer ", "").strip()
     else:
-        # If no Bearer prefix, treat the whole string as token (for compatibility)
         token = authorization.strip()
     
     if not token:
+        print("❌ Empty token")
         raise HTTPException(status_code=401, detail="Invalid token format")
     
+    # Decode the token
     payload = decode_token(token)
     if not payload:
+        print(f"❌ Failed to decode token: {token[:20]}...")
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     
+    # Get user ID from token
     user_id = payload.get("sub")
     if not user_id:
+        print("❌ No 'sub' field in token payload")
         raise HTTPException(status_code=401, detail="Invalid token payload")
     
+    # Get user from database
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
+        print(f"❌ User not found: {user_id}")
         raise HTTPException(status_code=401, detail="User not found")
     
+    print(f"✅ User authenticated: {user.username}")
     return user
 
 # ============================================
@@ -699,5 +713,5 @@ if __name__ == "__main__":
         "app:app",
         host="0.0.0.0",
         port=port,
-        reload=False  # Set to False for production
+        reload=False
     )

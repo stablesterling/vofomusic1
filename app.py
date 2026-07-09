@@ -1,22 +1,18 @@
 """
-🎵 VOFO Music - Python Backend
-Deployment-ready for Render with PostgreSQL
+🎵 VOFO Music - Python Backend (Simplified - No JWT)
 """
 
 import os
 import logging
-from fastapi import FastAPI, HTTPException, Depends, Query, Header
+from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime, Text, Boolean, func
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
-from passlib.context import CryptContext
-from datetime import datetime, timedelta
-from jose import jwt, JWTError
+from datetime import datetime
 from ytmusicapi import YTMusic
 from pydantic import BaseModel, Field
 from typing import Optional, List
-import urllib.parse
 
 # ============================================
 # CONFIGURATION
@@ -24,69 +20,35 @@ import urllib.parse
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./vofo_music.db")
 
-# Debug: Print the database URL (with password hidden)
-print("=" * 60)
-print("🔍 ENVIRONMENT VARIABLES CHECK:")
-print("=" * 60)
-
-if DATABASE_URL:
-    # Mask password for security
-    masked_url = DATABASE_URL
-    if "@" in masked_url:
-        parts = masked_url.split("@")
-        if "://" in parts[0]:
-            protocol_part = parts[0].split("://")[0] + "://"
-            user_pass = parts[0].split("://")[1]
-            if ":" in user_pass:
-                user = user_pass.split(":")[0]
-                masked_url = f"{protocol_part}{user}:****@{'@'.join(parts[1:])}"
-    print(f"📦 DATABASE_URL: {masked_url}")
-    print(f"📦 DATABASE_URL starts with postgresql: {DATABASE_URL.startswith('postgresql')}")
-else:
-    print("❌ DATABASE_URL not found in environment!")
-
-print(f"🔑 SECRET_KEY: {os.getenv('SECRET_KEY', 'NOT SET')[:20]}...")
-print(f"🐍 PYTHON_VERSION: {os.getenv('PYTHON_VERSION', 'NOT SET')}")
-print("=" * 60)
-
 if DATABASE_URL and DATABASE_URL.startswith("postgresql"):
     if "?" not in DATABASE_URL:
         DATABASE_URL += "?sslmode=require"
-        print("✅ Added sslmode=require to DATABASE_URL")
 
-SECRET_KEY = os.getenv("SECRET_KEY", "vofo_music_secret_key_2026_secure_7x9m2k4n8p1q5r3s6t8w0y")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 10080
+print(f"📦 DATABASE_URL: {DATABASE_URL[:50]}..." if DATABASE_URL else "❌ No DATABASE_URL")
 
 # ============================================
 # DATABASE SETUP
 # ============================================
 
-print(f"🔗 Connecting to database...")
-
 if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
     engine = create_engine(DATABASE_URL, connect_args=connect_args)
-    print("✅ Using SQLite database")
 else:
     engine = create_engine(DATABASE_URL)
-    print("✅ Using PostgreSQL database")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# Initialize YTMusic with error handling
+# Initialize YTMusic
 try:
     yt = YTMusic()
-    print("✅ YouTube Music API initialized successfully")
+    print("✅ YouTube Music API initialized")
 except Exception as e:
-    print(f"⚠️ YouTube Music API init error: {e}")
+    print(f"⚠️ YouTube Music API error: {e}")
     yt = None
 
 # ============================================
-# MODELS
+# MODELS - Simplified
 # ============================================
 
 class User(Base):
@@ -94,65 +56,24 @@ class User(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(100), unique=True, index=True, nullable=False)
-    email = Column(String(255), unique=True, index=True, nullable=False)
-    password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    last_login = Column(DateTime(timezone=True), nullable=True)
-    
-    favorites = relationship("Favorite", back_populates="user", cascade="all, delete-orphan")
-    playlists = relationship("Playlist", back_populates="user", cascade="all, delete-orphan")
 
 
 class Favorite(Base):
     __tablename__ = "favorites"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    username = Column(String(100), index=True, nullable=False)  # Simple username
     song_id = Column(String(50), nullable=False)
     title = Column(String(500), nullable=False)
     artist = Column(String(255))
     thumbnail = Column(String(500))
     duration = Column(String(20))
     added_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    user = relationship("User", back_populates="favorites")
-
-
-class Playlist(Base):
-    __tablename__ = "playlists"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    name = Column(String(100), nullable=False)
-    description = Column(Text, nullable=True)
-    is_public = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    
-    user = relationship("User", back_populates="playlists")
-    songs = relationship("PlaylistSong", back_populates="playlist", cascade="all, delete-orphan")
-
-
-class PlaylistSong(Base):
-    __tablename__ = "playlist_songs"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    playlist_id = Column(Integer, ForeignKey("playlists.id", ondelete="CASCADE"), nullable=False)
-    song_id = Column(String(50), nullable=False)
-    title = Column(String(500), nullable=False)
-    artist = Column(String(255))
-    thumbnail = Column(String(500))
-    duration = Column(String(20))
-    position = Column(Integer, default=0)
-    added_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    playlist = relationship("Playlist", back_populates="songs")
 
 
 # Create tables
-print("📊 Creating database tables...")
 Base.metadata.create_all(bind=engine)
-print("✅ Database tables created")
 
 # ============================================
 # PYDANTIC SCHEMAS
@@ -160,28 +81,9 @@ print("✅ Database tables created")
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
-    email: str = Field(..., min_length=3, max_length=255)
-    password: str = Field(..., min_length=6)
-
-class UserLogin(BaseModel):
-    username: str
-    password: str
-
-class UserResponse(BaseModel):
-    id: int
-    username: str
-    email: str
-    created_at: datetime
-    
-    class Config:
-        from_attributes = True
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user: UserResponse
 
 class FavoriteCreate(BaseModel):
+    username: str
     song_id: str
     title: str
     artist: Optional[str] = None
@@ -200,54 +102,9 @@ class FavoriteResponse(BaseModel):
     class Config:
         from_attributes = True
 
-class PlaylistCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    description: Optional[str] = None
-    is_public: bool = False
-
-class PlaylistResponse(BaseModel):
-    id: int
-    name: str
-    description: Optional[str]
-    is_public: bool
-    song_count: int = 0
-    created_at: datetime
-    
-    class Config:
-        from_attributes = True
-
-class PlaylistDetailResponse(PlaylistResponse):
-    songs: List[dict] = []
-
 # ============================================
-# AUTH FUNCTIONS
+# DATABASE FUNCTIONS
 # ============================================
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-def create_access_token(data: dict) -> str:
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    print(f"🔑 Created token for user {data.get('sub')}")
-    return encoded_jwt
-
-def decode_token(token: str) -> dict:
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        print(f"✅ Token decoded successfully")
-        return payload
-    except JWTError as e:
-        print(f"❌ JWT Decode Error: {str(e)}")
-        return None
-    except Exception as e:
-        print(f"❌ Unexpected error: {str(e)}")
-        return None
 
 def get_db():
     db = SessionLocal()
@@ -256,49 +113,11 @@ def get_db():
     finally:
         db.close()
 
-async def get_current_user(
-    authorization: Optional[str] = Header(None),
-    db: Session = Depends(get_db)
-):
-    if not authorization:
-        print("❌ No Authorization header")
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    if authorization.startswith("Bearer "):
-        token = authorization.replace("Bearer ", "").strip()
-    else:
-        token = authorization.strip()
-    
-    if not token:
-        print("❌ Empty token")
-        raise HTTPException(status_code=401, detail="Invalid token format")
-    
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    user_id = payload.get("sub")
-    if not user_id:
-        print("❌ No sub field")
-        raise HTTPException(status_code=401, detail="Invalid token payload")
-    
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        print(f"❌ User not found: {user_id}")
-        raise HTTPException(status_code=401, detail="User not found")
-    
-    print(f"✅ User authenticated: {user.username}")
-    return user
-
 # ============================================
 # FASTAPI APP
 # ============================================
 
-app = FastAPI(
-    title="VOFO Music API",
-    description="Premium YouTube Music Experience",
-    version="2.0.0"
-)
+app = FastAPI(title="VOFO Music API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -313,102 +132,40 @@ app.add_middleware(
 # ============================================
 
 @app.get("/api/health")
-async def health_check(db: Session = Depends(get_db)):
-    try:
-        db.execute("SELECT 1")
-        return {
-            "status": "OK",
-            "timestamp": datetime.utcnow().isoformat(),
-            "message": "✦ VOFO Music is live"
-        }
-    except Exception as e:
-        return {"status": "ERROR", "message": str(e)}
+async def health_check():
+    return {"status": "OK", "message": "✦ VOFO Music is live"}
 
-# ---------- DEBUG ENDPOINT ----------
-@app.get("/api/debug/token")
-async def debug_token(authorization: Optional[str] = Header(None)):
-    """Debug endpoint to check token validation"""
-    if not authorization:
-        return {
-            "valid": False,
-            "error": "No token provided",
-            "secret_key": SECRET_KEY[:20] + "...",
-            "algorithm": ALGORITHM
-        }
-    
-    if authorization.startswith("Bearer "):
-        token = authorization.replace("Bearer ", "").strip()
-    else:
-        token = authorization.strip()
-    
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return {
-            "valid": True,
-            "payload": payload,
-            "secret_key": SECRET_KEY[:20] + "...",
-            "algorithm": ALGORITHM,
-            "token_preview": token[:30] + "..."
-        }
-    except Exception as e:
-        return {
-            "valid": False,
-            "error": str(e),
-            "secret_key": SECRET_KEY[:20] + "...",
-            "algorithm": ALGORITHM,
-            "token_preview": token[:30] + "..."
-        }
+# ---------- AUTH (Simplified) ----------
 
-# ---------- AUTH ----------
-
-@app.post("/api/auth/register", response_model=TokenResponse)
+@app.post("/api/auth/register")
 async def register(user_data: UserCreate, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.username == user_data.username).first():
+    # Check if username exists
+    existing = db.query(User).filter(User.username == user_data.username).first()
+    if existing:
         raise HTTPException(400, "Username already taken")
     
-    if db.query(User).filter(User.email == user_data.email).first():
-        raise HTTPException(400, "Email already registered")
-    
-    user = User(
-        username=user_data.username,
-        email=user_data.email,
-        password_hash=get_password_hash(user_data.password)
-    )
+    # Create user
+    user = User(username=user_data.username)
     db.add(user)
     db.commit()
-    db.refresh(user)
     
-    token = create_access_token({"sub": user.id})
-    
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": UserResponse.model_validate(user)
-    }
+    return {"success": True, "username": user_data.username}
 
-@app.post("/api/auth/login", response_model=TokenResponse)
-async def login(user_data: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(
-        (User.username == user_data.username) | (User.email == user_data.username)
-    ).first()
+@app.post("/api/auth/login")
+async def login(user_data: UserCreate, db: Session = Depends(get_db)):
+    # Check if user exists
+    user = db.query(User).filter(User.username == user_data.username).first()
+    if not user:
+        raise HTTPException(401, "User not found")
     
-    if not user or not verify_password(user_data.password, user.password_hash):
-        raise HTTPException(401, "Invalid credentials")
-    
-    user.last_login = datetime.utcnow()
-    db.commit()
-    
-    token = create_access_token({"sub": user.id})
-    
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": UserResponse.model_validate(user)
-    }
+    return {"success": True, "username": user_data.username}
 
-@app.get("/api/auth/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
-    return UserResponse.model_validate(current_user)
+@app.get("/api/auth/me")
+async def get_me(username: str = Query(...), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    return {"username": user.username, "created_at": user.created_at}
 
 # ---------- YOUTUBE MUSIC ----------
 
@@ -416,7 +173,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
 async def get_trending():
     try:
         if not yt:
-            raise Exception("YouTube Music API not initialized")
+            return []
         
         charts = yt.get_charts(country="IN")
         songs = charts.get('songs', {}).get('items', [])
@@ -440,8 +197,7 @@ async def get_trending():
                 "duration": s.get('duration', '')
             })
         
-        return results if results else []
-        
+        return results
     except Exception as e:
         logging.error(f"Trending error: {str(e)}")
         return []
@@ -450,7 +206,7 @@ async def get_trending():
 async def search_songs(q: str = Query(..., min_length=1)):
     try:
         if not yt:
-            raise Exception("YouTube Music API not initialized")
+            return []
             
         results = yt.search(q, filter="songs")
         
@@ -474,24 +230,22 @@ async def search_songs(q: str = Query(..., min_length=1)):
         logging.error(f"Search error: {str(e)}")
         return []
 
-# ---------- FAVORITES ----------
+# ---------- FAVORITES (Simplified - No JWT) ----------
 
 @app.post("/api/favorites")
-async def add_favorite(
-    song: FavoriteCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def add_favorite(song: FavoriteCreate, db: Session = Depends(get_db)):
+    # Check if already favorited
     existing = db.query(Favorite).filter(
-        Favorite.user_id == current_user.id,
+        Favorite.username == song.username,
         Favorite.song_id == song.song_id
     ).first()
     
     if existing:
         return {"message": "Already in favorites", "favorited": True}
     
+    # Add to favorites
     favorite = Favorite(
-        user_id=current_user.id,
+        username=song.username,
         song_id=song.song_id,
         title=song.title,
         artist=song.artist,
@@ -506,11 +260,11 @@ async def add_favorite(
 @app.delete("/api/favorites/{song_id}")
 async def remove_favorite(
     song_id: str,
-    current_user: User = Depends(get_current_user),
+    username: str = Query(...),
     db: Session = Depends(get_db)
 ):
     result = db.query(Favorite).filter(
-        Favorite.user_id == current_user.id,
+        Favorite.username == username,
         Favorite.song_id == song_id
     ).delete()
     db.commit()
@@ -522,11 +276,11 @@ async def remove_favorite(
 
 @app.get("/api/favorites")
 async def get_favorites(
-    current_user: User = Depends(get_current_user),
+    username: str = Query(...),
     db: Session = Depends(get_db)
 ):
     favorites = db.query(Favorite).filter(
-        Favorite.user_id == current_user.id
+        Favorite.username == username
     ).order_by(Favorite.added_at.desc()).all()
     
     return [FavoriteResponse.model_validate(f) for f in favorites]
@@ -534,181 +288,15 @@ async def get_favorites(
 @app.get("/api/favorites/check/{song_id}")
 async def check_favorite(
     song_id: str,
-    current_user: User = Depends(get_current_user),
+    username: str = Query(...),
     db: Session = Depends(get_db)
 ):
     favorite = db.query(Favorite).filter(
-        Favorite.user_id == current_user.id,
+        Favorite.username == username,
         Favorite.song_id == song_id
     ).first()
     
     return {"isFavorited": favorite is not None}
-
-# ---------- PLAYLISTS ----------
-
-@app.post("/api/playlists")
-async def create_playlist(
-    playlist: PlaylistCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    db_playlist = Playlist(
-        user_id=current_user.id,
-        name=playlist.name,
-        description=playlist.description,
-        is_public=playlist.is_public
-    )
-    db.add(db_playlist)
-    db.commit()
-    db.refresh(db_playlist)
-    
-    return PlaylistResponse(
-        id=db_playlist.id,
-        name=db_playlist.name,
-        description=db_playlist.description,
-        is_public=db_playlist.is_public,
-        song_count=0,
-        created_at=db_playlist.created_at
-    )
-
-@app.get("/api/playlists")
-async def get_playlists(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    playlists = db.query(Playlist).filter(
-        (Playlist.user_id == current_user.id) | (Playlist.is_public == True)
-    ).order_by(Playlist.created_at.desc()).all()
-    
-    result = []
-    for p in playlists:
-        song_count = db.query(PlaylistSong).filter(
-            PlaylistSong.playlist_id == p.id
-        ).count()
-        result.append(PlaylistResponse(
-            id=p.id,
-            name=p.name,
-            description=p.description,
-            is_public=p.is_public,
-            song_count=song_count,
-            created_at=p.created_at
-        ))
-    return result
-
-@app.get("/api/playlists/{playlist_id}")
-async def get_playlist_detail(
-    playlist_id: int,
-    db: Session = Depends(get_db)
-):
-    playlist = db.query(Playlist).filter(Playlist.id == playlist_id).first()
-    if not playlist:
-        raise HTTPException(404, "Playlist not found")
-    
-    songs = db.query(PlaylistSong).filter(
-        PlaylistSong.playlist_id == playlist_id
-    ).order_by(PlaylistSong.position).all()
-    
-    return PlaylistDetailResponse(
-        id=playlist.id,
-        name=playlist.name,
-        description=playlist.description,
-        is_public=playlist.is_public,
-        song_count=len(songs),
-        created_at=playlist.created_at,
-        songs=[{
-            "id": s.song_id,
-            "title": s.title,
-            "artist": s.artist,
-            "thumbnail": s.thumbnail,
-            "duration": s.duration
-        } for s in songs]
-    )
-
-@app.post("/api/playlists/{playlist_id}/songs")
-async def add_to_playlist(
-    playlist_id: int,
-    song: FavoriteCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    playlist = db.query(Playlist).filter(
-        Playlist.id == playlist_id,
-        Playlist.user_id == current_user.id
-    ).first()
-    
-    if not playlist:
-        raise HTTPException(404, "Playlist not found or you don't own it")
-    
-    existing = db.query(PlaylistSong).filter(
-        PlaylistSong.playlist_id == playlist_id,
-        PlaylistSong.song_id == song.song_id
-    ).first()
-    
-    if existing:
-        return {"message": "Already in playlist"}
-    
-    max_pos = db.query(PlaylistSong).filter(
-        PlaylistSong.playlist_id == playlist_id
-    ).count()
-    
-    playlist_song = PlaylistSong(
-        playlist_id=playlist_id,
-        song_id=song.song_id,
-        title=song.title,
-        artist=song.artist,
-        thumbnail=song.thumbnail,
-        duration=song.duration,
-        position=max_pos
-    )
-    db.add(playlist_song)
-    db.commit()
-    
-    return {"message": "Added to playlist"}
-
-@app.delete("/api/playlists/{playlist_id}/songs/{song_id}")
-async def remove_from_playlist(
-    playlist_id: int,
-    song_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    playlist = db.query(Playlist).filter(
-        Playlist.id == playlist_id,
-        Playlist.user_id == current_user.id
-    ).first()
-    
-    if not playlist:
-        raise HTTPException(404, "Playlist not found or you don't own it")
-    
-    result = db.query(PlaylistSong).filter(
-        PlaylistSong.playlist_id == playlist_id,
-        PlaylistSong.song_id == song_id
-    ).delete()
-    db.commit()
-    
-    if result:
-        return {"message": "Removed from playlist"}
-    else:
-        raise HTTPException(404, "Song not in playlist")
-
-@app.delete("/api/playlists/{playlist_id}")
-async def delete_playlist(
-    playlist_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    playlist = db.query(Playlist).filter(
-        Playlist.id == playlist_id,
-        Playlist.user_id == current_user.id
-    ).first()
-    
-    if not playlist:
-        raise HTTPException(404, "Playlist not found or you don't own it")
-    
-    db.delete(playlist)
-    db.commit()
-    
-    return {"message": "Playlist deleted"}
 
 # ============================================
 # SERVE FRONTEND
@@ -717,8 +305,7 @@ async def delete_playlist(
 @app.get("/")
 async def serve_frontend():
     try:
-        html_path = os.path.join(os.path.dirname(__file__), "index.html")
-        with open(html_path, "r", encoding="utf-8") as f:
+        with open("index.html", "r", encoding="utf-8") as f:
             return HTMLResponse(f.read())
     except FileNotFoundError:
         return HTMLResponse("""
@@ -742,9 +329,4 @@ async def serve_frontend():
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=port,
-        reload=False
-    )
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)

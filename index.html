@@ -6,6 +6,7 @@
     <title>VoFo Music | Private Listening</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
     <style>
+        /* ... all your existing CSS ... */
         :root { 
             --bg: #0a0a0a; 
             --gold: #c5a367; 
@@ -112,7 +113,7 @@
             to { opacity: 1; }
         }
         
-        /* AUTH UI */
+        /* AUTH UI - Updated with single input */
         .auth-container { 
             position: fixed; 
             inset: 0; 
@@ -779,7 +780,7 @@
     <div class="vofo-animated">VoFo</div>
 </div>
 
-<!-- Auth Screen -->
+<!-- Auth Screen - Single input -->
 <div id="authScreen" class="auth-container">
     <div id="loginForm" class="auth-card">
         <div class="auth-header">
@@ -787,8 +788,7 @@
             <div class="vofo-logo">VoFo</div>
             <div class="auth-sub">HIGH-FIDELITY · NO ADS · NO TRACKING</div>
         </div>
-        <input type="text" id="lUser" placeholder="USERNAME" autocomplete="username">
-        <input type="text" id="lPass" placeholder="PASSWORD (optional)" autocomplete="current-password">
+        <input type="text" id="lUser" placeholder="USERNAME" autocomplete="username" onkeypress="if(event.key==='Enter') handleAuth()">
         <div id="authError" class="auth-error"></div>
         <button class="auth-btn" onclick="handleAuth()">Initialize</button>
         <p class="auth-switch" onclick="toggleAuth()">CREATE ACCOUNT</p>
@@ -989,11 +989,10 @@ function onYouTubeIframeAPIReady() {
 }
 
 // ============================================
-// AUTHENTICATION (Simplified - No JWT)
+// AUTHENTICATION (Simplified - No JWT, No Password)
 // ============================================
 async function handleAuth() {
     const u = document.getElementById('lUser').value.trim();
-    const p = document.getElementById('lPass').value.trim();
     const authBtn = document.querySelector('.auth-btn');
     const errorDiv = document.getElementById('authError');
     
@@ -1052,7 +1051,6 @@ function toggleAuth() {
     authSwitch.innerText = isLoginMode ? "CREATE ACCOUNT" : "ALREADY HAVE AN ACCOUNT?";
     
     document.getElementById('lUser').value = '';
-    document.getElementById('lPass').value = '';
     document.getElementById('authError').textContent = '';
     document.getElementById('lUser').focus();
 }
@@ -1263,10 +1261,8 @@ function renderTracks(tracks, target) {
         </div>
     `).join('');
     
-    // Store tracks for playlist
     window._currentTrackList = tracks;
     
-    // Check favorites if user is logged in
     if (currentUser) {
         setTimeout(() => {
             tracks.forEach(s => checkFavorite(s.id));
@@ -1314,8 +1310,8 @@ async function toggleFavorite(songId, title, artist, thumbnail) {
                 username: currentUser.username,
                 song_id: songId, 
                 title: title, 
-                artist: artist,
-                thumbnail: thumbnail
+                artist: artist || "Unknown Artist",
+                thumbnail: thumbnail || ""
             })
         });
 
@@ -1346,6 +1342,7 @@ async function checkFavorite(songId) {
     
     try {
         const response = await fetch(`${BACKEND_URL}/favorites/check/${songId}?username=${encodeURIComponent(currentUser.username)}`);
+        if (!response.ok) return;
         const data = await response.json();
         const btn = document.getElementById(`fav_${songId}`);
         if (btn && data.isFavorited) {
@@ -1384,8 +1381,8 @@ async function toggleLikeCurrent() {
                 username: currentUser.username,
                 song_id: song.id, 
                 title: song.title, 
-                artist: song.artist,
-                thumbnail: song.thumbnail
+                artist: song.artist || "Unknown Artist",
+                thumbnail: song.thumbnail || ""
             })
         });
 
@@ -1417,6 +1414,7 @@ async function checkIfLiked(id) {
     
     try {
         const response = await fetch(`${BACKEND_URL}/favorites/check/${id}?username=${encodeURIComponent(currentUser.username)}`);
+        if (!response.ok) return;
         const data = await response.json();
         document.getElementById('likeBtn').classList.toggle('liked', data.isFavorited || false);
     } catch (error) {

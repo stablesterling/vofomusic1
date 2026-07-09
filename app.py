@@ -7,8 +7,8 @@ import logging
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, func
-from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, func
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from datetime import datetime
 from ytmusicapi import YTMusic
 from pydantic import BaseModel, Field
@@ -48,7 +48,7 @@ except Exception as e:
     yt = None
 
 # ============================================
-# MODELS - Simplified
+# MODELS
 # ============================================
 
 class User(Base):
@@ -63,7 +63,7 @@ class Favorite(Base):
     __tablename__ = "favorites"
     
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(100), index=True, nullable=False)  # Simple username
+    username = Column(String(100), index=True, nullable=False)
     song_id = Column(String(50), nullable=False)
     title = Column(String(500), nullable=False)
     artist = Column(String(255))
@@ -74,13 +74,14 @@ class Favorite(Base):
 
 # Create tables
 Base.metadata.create_all(bind=engine)
+print("✅ Database tables created")
 
 # ============================================
 # PYDANTIC SCHEMAS
 # ============================================
 
 class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
+    username: str = Field(..., min_length=1, max_length=50)
 
 class FavoriteCreate(BaseModel):
     username: str
@@ -135,37 +136,49 @@ app.add_middleware(
 async def health_check():
     return {"status": "OK", "message": "✦ VOFO Music is live"}
 
-# ---------- AUTH (Simplified) ----------
+# ---------- AUTH ----------
 
 @app.post("/api/auth/register")
 async def register(user_data: UserCreate, db: Session = Depends(get_db)):
-    # Check if username exists
-    existing = db.query(User).filter(User.username == user_data.username).first()
-    if existing:
-        raise HTTPException(400, "Username already taken")
-    
-    # Create user
-    user = User(username=user_data.username)
-    db.add(user)
-    db.commit()
-    
-    return {"success": True, "username": user_data.username}
+    try:
+        # Check if username exists
+        existing = db.query(User).filter(User.username == user_data.username).first()
+        if existing:
+            raise HTTPException(400, "Username already taken")
+        
+        # Create user
+        user = User(username=user_data.username)
+        db.add(user)
+        db.commit()
+        
+        return {"success": True, "username": user_data.username}
+    except Exception as e:
+        print(f"Register error: {str(e)}")
+        raise HTTPException(500, f"Registration failed: {str(e)}")
 
 @app.post("/api/auth/login")
 async def login(user_data: UserCreate, db: Session = Depends(get_db)):
-    # Check if user exists
-    user = db.query(User).filter(User.username == user_data.username).first()
-    if not user:
-        raise HTTPException(401, "User not found")
-    
-    return {"success": True, "username": user_data.username}
+    try:
+        # Check if user exists
+        user = db.query(User).filter(User.username == user_data.username).first()
+        if not user:
+            raise HTTPException(401, "User not found")
+        
+        return {"success": True, "username": user_data.username}
+    except Exception as e:
+        print(f"Login error: {str(e)}")
+        raise HTTPException(500, f"Login failed: {str(e)}")
 
 @app.get("/api/auth/me")
 async def get_me(username: str = Query(...), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
-        raise HTTPException(404, "User not found")
-    return {"username": user.username, "created_at": user.created_at}
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            raise HTTPException(404, "User not found")
+        return {"username": user.username, "created_at": user.created_at}
+    except Exception as e:
+        print(f"Get me error: {str(e)}")
+        raise HTTPException(500, f"Failed to get user: {str(e)}")
 
 # ---------- YOUTUBE MUSIC ----------
 
@@ -199,7 +212,7 @@ async def get_trending():
         
         return results
     except Exception as e:
-        logging.error(f"Trending error: {str(e)}")
+        print(f"Trending error: {str(e)}")
         return []
 
 @app.get("/api/search")
@@ -227,35 +240,39 @@ async def search_songs(q: str = Query(..., min_length=1)):
         
         return songs
     except Exception as e:
-        logging.error(f"Search error: {str(e)}")
+        print(f"Search error: {str(e)}")
         return []
 
-# ---------- FAVORITES (Simplified - No JWT) ----------
+# ---------- FAVORITES ----------
 
 @app.post("/api/favorites")
 async def add_favorite(song: FavoriteCreate, db: Session = Depends(get_db)):
-    # Check if already favorited
-    existing = db.query(Favorite).filter(
-        Favorite.username == song.username,
-        Favorite.song_id == song.song_id
-    ).first()
-    
-    if existing:
-        return {"message": "Already in favorites", "favorited": True}
-    
-    # Add to favorites
-    favorite = Favorite(
-        username=song.username,
-        song_id=song.song_id,
-        title=song.title,
-        artist=song.artist,
-        thumbnail=song.thumbnail,
-        duration=song.duration
-    )
-    db.add(favorite)
-    db.commit()
-    
-    return {"message": "Added to favorites", "favorited": True}
+    try:
+        # Check if already favorited
+        existing = db.query(Favorite).filter(
+            Favorite.username == song.username,
+            Favorite.song_id == song.song_id
+        ).first()
+        
+        if existing:
+            return {"message": "Already in favorites", "favorited": True}
+        
+        # Add to favorites
+        favorite = Favorite(
+            username=song.username,
+            song_id=song.song_id,
+            title=song.title,
+            artist=song.artist or "Unknown Artist",
+            thumbnail=song.thumbnail or "",
+            duration=song.duration or ""
+        )
+        db.add(favorite)
+        db.commit()
+        
+        return {"message": "Added to favorites", "favorited": True}
+    except Exception as e:
+        print(f"Add favorite error: {str(e)}")
+        raise HTTPException(500, f"Failed to add favorite: {str(e)}")
 
 @app.delete("/api/favorites/{song_id}")
 async def remove_favorite(
@@ -263,27 +280,35 @@ async def remove_favorite(
     username: str = Query(...),
     db: Session = Depends(get_db)
 ):
-    result = db.query(Favorite).filter(
-        Favorite.username == username,
-        Favorite.song_id == song_id
-    ).delete()
-    db.commit()
-    
-    if result:
-        return {"message": "Removed from favorites", "favorited": False}
-    else:
-        raise HTTPException(404, "Song not found in favorites")
+    try:
+        result = db.query(Favorite).filter(
+            Favorite.username == username,
+            Favorite.song_id == song_id
+        ).delete()
+        db.commit()
+        
+        if result:
+            return {"message": "Removed from favorites", "favorited": False}
+        else:
+            raise HTTPException(404, "Song not found in favorites")
+    except Exception as e:
+        print(f"Remove favorite error: {str(e)}")
+        raise HTTPException(500, f"Failed to remove favorite: {str(e)}")
 
 @app.get("/api/favorites")
 async def get_favorites(
     username: str = Query(...),
     db: Session = Depends(get_db)
 ):
-    favorites = db.query(Favorite).filter(
-        Favorite.username == username
-    ).order_by(Favorite.added_at.desc()).all()
-    
-    return [FavoriteResponse.model_validate(f) for f in favorites]
+    try:
+        favorites = db.query(Favorite).filter(
+            Favorite.username == username
+        ).order_by(Favorite.added_at.desc()).all()
+        
+        return [FavoriteResponse.model_validate(f) for f in favorites]
+    except Exception as e:
+        print(f"Get favorites error: {str(e)}")
+        raise HTTPException(500, f"Failed to get favorites: {str(e)}")
 
 @app.get("/api/favorites/check/{song_id}")
 async def check_favorite(
@@ -291,12 +316,16 @@ async def check_favorite(
     username: str = Query(...),
     db: Session = Depends(get_db)
 ):
-    favorite = db.query(Favorite).filter(
-        Favorite.username == username,
-        Favorite.song_id == song_id
-    ).first()
-    
-    return {"isFavorited": favorite is not None}
+    try:
+        favorite = db.query(Favorite).filter(
+            Favorite.username == username,
+            Favorite.song_id == song_id
+        ).first()
+        
+        return {"isFavorited": favorite is not None}
+    except Exception as e:
+        print(f"Check favorite error: {str(e)}")
+        raise HTTPException(500, f"Failed to check favorite: {str(e)}")
 
 # ============================================
 # SERVE FRONTEND

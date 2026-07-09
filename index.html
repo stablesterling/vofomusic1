@@ -924,20 +924,47 @@ window.onload = () => {
                 document.getElementById('authScreen').classList.add('hidden');
                 document.getElementById('app').classList.remove('hidden');
                 fetchTrending();
-                verifyToken();
+                // Verify token silently
+                verifyTokenSilently();
             });
         } catch (e) {
             localStorage.removeItem('vofo_user');
             localStorage.removeItem('vofo_token');
+            showToast('Session expired. Please login again.', 'error');
         }
     }
 };
 
 // ============================================
-// VERIFY TOKEN
+// VERIFY TOKEN (Silent)
+// ============================================
+async function verifyTokenSilently() {
+    if (!token) return;
+    try {
+        const response = await fetch(`${BACKEND_URL}/auth/me?token=${token}`);
+        if (!response.ok) {
+            // Token invalid - clear it
+            localStorage.removeItem('vofo_user');
+            localStorage.removeItem('vofo_token');
+            token = null;
+            currentUser = null;
+            showToast('Session expired. Please login again.', 'error');
+            setTimeout(() => location.reload(), 2000);
+        }
+    } catch (error) {
+        console.error('Token verification error:', error);
+        // Don't auto-logout on network errors
+    }
+}
+
+// ============================================
+// VERIFY TOKEN (Explicit)
 // ============================================
 async function verifyToken() {
-    if (!token) return;
+    if (!token) {
+        showToast('Not authenticated. Please login.', 'error');
+        return false;
+    }
     try {
         const response = await fetch(`${BACKEND_URL}/auth/me?token=${token}`);
         if (!response.ok) {
@@ -946,10 +973,13 @@ async function verifyToken() {
             token = null;
             currentUser = null;
             showToast('Session expired. Please login again.', 'error');
-            location.reload();
+            setTimeout(() => location.reload(), 2000);
+            return false;
         }
+        return true;
     } catch (error) {
         console.error('Token verification error:', error);
+        return false;
     }
 }
 
@@ -1316,12 +1346,24 @@ function escapeHtml(text) {
 }
 
 // ============================================
-// FAVORITES
+// FAVORITES - FIXED VERSION
 // ============================================
 async function toggleFavorite(songId, title, artist, thumbnail) {
+    // Check authentication FIRST
     if (!currentUser || !token) {
-        showToast('Sign in to favorite songs', 'error');
-        return;
+        showToast('Please login to favorite songs', 'error');
+        // Try to refresh token
+        const verified = await verifyToken();
+        if (!verified) {
+            // If token is invalid, prompt login
+            showToast('Session expired. Please login again.', 'error');
+            setTimeout(() => location.reload(), 2000);
+            return;
+        }
+        // If token was refreshed, continue
+        if (!currentUser || !token) {
+            return;
+        }
     }
     
     const btn = document.getElementById(`fav_${songId}`);
@@ -1344,6 +1386,17 @@ async function toggleFavorite(songId, title, artist, thumbnail) {
             })
         });
 
+        if (response.status === 401) {
+            // Token expired - clear and reload
+            localStorage.removeItem('vofo_user');
+            localStorage.removeItem('vofo_token');
+            token = null;
+            currentUser = null;
+            showToast('Session expired. Please login again.', 'error');
+            setTimeout(() => location.reload(), 2000);
+            return;
+        }
+
         if (response.ok) {
             btn.classList.toggle('liked');
             btn.textContent = btn.classList.contains('liked') ? '♥' : '♡';
@@ -1351,7 +1404,7 @@ async function toggleFavorite(songId, title, artist, thumbnail) {
             
             // Refresh library if open
             if (!document.getElementById('libraryTab').classList.contains('hidden')) {
-                fetchLiked();
+                await fetchLiked();
             }
             
             // Update current song like button if this is the currently playing song
@@ -1364,7 +1417,7 @@ async function toggleFavorite(songId, title, artist, thumbnail) {
         }
     } catch (error) {
         console.error('Favorite error:', error);
-        showToast('Network error', 'error');
+        showToast('Network error. Please try again.', 'error');
     }
 }
 
@@ -1375,6 +1428,16 @@ async function checkFavorite(songId) {
         const response = await fetch(`${BACKEND_URL}/favorites/check/${songId}`, {
             headers: { 'Authorization': `Bearer ${token}` }
         });
+        
+        if (response.status === 401) {
+            // Token expired - clear silently
+            localStorage.removeItem('vofo_user');
+            localStorage.removeItem('vofo_token');
+            token = null;
+            currentUser = null;
+            return;
+        }
+        
         const data = await response.json();
         const btn = document.getElementById(`fav_${songId}`);
         if (btn && data.isFavorited) {
@@ -1387,9 +1450,18 @@ async function checkFavorite(songId) {
 }
 
 async function toggleLikeCurrent() {
+    // Check authentication FIRST
     if (!currentUser || !token) {
-        showToast('Sign in to like songs', 'error');
-        return;
+        showToast('Please login to like songs', 'error');
+        const verified = await verifyToken();
+        if (!verified) {
+            showToast('Session expired. Please login again.', 'error');
+            setTimeout(() => location.reload(), 2000);
+            return;
+        }
+        if (!currentUser || !token) {
+            return;
+        }
     }
     
     if (!currentSongData) {
@@ -1416,6 +1488,16 @@ async function toggleLikeCurrent() {
             })
         });
 
+        if (response.status === 401) {
+            localStorage.removeItem('vofo_user');
+            localStorage.removeItem('vofo_token');
+            token = null;
+            currentUser = null;
+            showToast('Session expired. Please login again.', 'error');
+            setTimeout(() => location.reload(), 2000);
+            return;
+        }
+
         if (response.ok) {
             likeBtn.classList.toggle('liked');
             showToast(isLiked ? 'Removed from favorites' : 'Added to favorites ♥', 'success');
@@ -1429,7 +1511,7 @@ async function toggleLikeCurrent() {
             
             // Refresh library if open
             if (!document.getElementById('libraryTab').classList.contains('hidden')) {
-                fetchLiked();
+                await fetchLiked();
             }
         } else {
             const data = await response.json();
@@ -1437,7 +1519,7 @@ async function toggleLikeCurrent() {
         }
     } catch (error) {
         console.error('Like error:', error);
-        showToast('Network error', 'error');
+        showToast('Network error. Please try again.', 'error');
     }
 }
 
@@ -1448,6 +1530,14 @@ async function checkIfLiked(id) {
         const response = await fetch(`${BACKEND_URL}/favorites/check/${id}`, {
             headers: { 'Authorization': `Bearer ${token}` }
         });
+        if (response.status === 401) {
+            // Token expired - clear silently
+            localStorage.removeItem('vofo_user');
+            localStorage.removeItem('vofo_token');
+            token = null;
+            currentUser = null;
+            return;
+        }
         const data = await response.json();
         document.getElementById('likeBtn').classList.toggle('liked', data.isFavorited || false);
     } catch (error) {
@@ -1456,9 +1546,17 @@ async function checkIfLiked(id) {
 }
 
 async function fetchLiked() {
+    // Check authentication FIRST
     if (!currentUser || !token) {
-        showToast('Please login to see favorites', 'info');
-        return;
+        showToast('Please login to see favorites', 'error');
+        const verified = await verifyToken();
+        if (!verified) {
+            // If verification fails, show login prompt
+            return;
+        }
+        if (!currentUser || !token) {
+            return;
+        }
     }
     
     const container = document.getElementById('libraryResults');
@@ -1469,16 +1567,24 @@ async function fetchLiked() {
             headers: { 'Authorization': `Bearer ${token}` }
         });
         
+        if (response.status === 401) {
+            localStorage.removeItem('vofo_user');
+            localStorage.removeItem('vofo_token');
+            token = null;
+            currentUser = null;
+            showToast('Session expired. Please login again.', 'error');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">🔒</div>
+                    <h3>Session Expired</h3>
+                    <p>Please login again to view your favorites</p>
+                </div>
+            `;
+            setTimeout(() => location.reload(), 2000);
+            return;
+        }
+        
         if (!response.ok) {
-            if (response.status === 401) {
-                localStorage.removeItem('vofo_user');
-                localStorage.removeItem('vofo_token');
-                token = null;
-                currentUser = null;
-                showToast('Session expired. Please login again.', 'error');
-                location.reload();
-                return;
-            }
             throw new Error('Failed to fetch favorites');
         }
         

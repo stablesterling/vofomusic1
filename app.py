@@ -7,12 +7,13 @@ import logging
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, func
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, func, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from datetime import datetime
 from ytmusicapi import YTMusic
 from pydantic import BaseModel, Field
 from typing import Optional, List
+import time
 
 # ============================================
 # CONFIGURATION
@@ -66,15 +67,88 @@ class Favorite(Base):
     username = Column(String(100), index=True, nullable=False)
     song_id = Column(String(50), nullable=False)
     title = Column(String(500), nullable=False)
-    artist = Column(String(255))
-    thumbnail = Column(String(500))
-    duration = Column(String(20))
+    artist = Column(String(255), default="Unknown Artist")
+    thumbnail = Column(String(500), default="")
+    duration = Column(String(20), default="")
     added_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
-# Create tables
-Base.metadata.create_all(bind=engine)
-print("✅ Database tables created")
+# ============================================
+# DATABASE MIGRATION - FIXED
+# ============================================
+def migrate_database():
+    """Check and fix database schema"""
+    try:
+        inspector = inspect(engine)
+        existing_tables = inspector.get_table_names()
+        
+        print(f"📊 Existing tables: {existing_tables}")
+        
+        # Drop and recreate tables to fix schema issues
+        if "favorites" in existing_tables:
+            print("🔄 Dropping existing favorites table to fix schema...")
+            with engine.connect() as conn:
+                # Disable foreign key checks for PostgreSQL
+                if DATABASE_URL.startswith("postgresql"):
+                    conn.execute(text("DROP TABLE IF EXISTS favorites CASCADE"))
+                else:
+                    conn.execute(text("DROP TABLE IF EXISTS favorites"))
+                conn.commit()
+            print("✅ Dropped favorites table")
+        
+        if "users" in existing_tables:
+            print("🔄 Dropping existing users table to fix schema...")
+            with engine.connect() as conn:
+                if DATABASE_URL.startswith("postgresql"):
+                    conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
+                else:
+                    conn.execute(text("DROP TABLE IF EXISTS users"))
+                conn.commit()
+            print("✅ Dropped users table")
+        
+        # Create fresh tables
+        print("📊 Creating fresh database tables...")
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database tables created successfully")
+        
+        # Verify the schema
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        print(f"📊 Tables after migration: {tables}")
+        
+        # Check columns in favorites table
+        if "favorites" in tables:
+            columns = inspector.get_columns("favorites")
+            col_names = [c['name'] for c in columns]
+            print(f"📊 Favorites columns: {col_names}")
+            
+            if "username" not in col_names:
+                print("❌ CRITICAL: username column missing! Adding it...")
+                with engine.connect() as conn:
+                    if DATABASE_URL.startswith("postgresql"):
+                        conn.execute(text("ALTER TABLE favorites ADD COLUMN username VARCHAR(100)"))
+                        conn.execute(text("CREATE INDEX idx_favorites_username ON favorites(username)"))
+                    else:
+                        conn.execute(text("ALTER TABLE favorites ADD COLUMN username VARCHAR(100)"))
+                    conn.commit()
+                print("✅ Added username column to favorites table")
+        
+        return True
+    except Exception as e:
+        print(f"❌ Migration error: {str(e)}")
+        # Force create tables
+        try:
+            Base.metadata.create_all(bind=engine)
+            print("✅ Tables created via fallback")
+            return True
+        except Exception as e2:
+            print(f"❌ Fallback failed: {str(e2)}")
+            return False
+
+# Run migration on startup
+print("🔧 Running database migration...")
+migrate_database()
+print("✅ Database ready")
 
 # ============================================
 # PYDANTIC SCHEMAS
@@ -111,6 +185,10 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception as e:
+        print(f"Database session error: {str(e)}")
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -133,14 +211,28 @@ app.add_middleware(
 # ============================================
 
 @app.get("/api/health")
-async def health_check():
-    return {"status": "OK", "message": "✦ VOFO Music is live"}
+async def health_check(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {
+            "status": "OK", 
+            "message": "✦ VOFO Music is live",
+            "database": "connected"
+        }
+    except Exception as e:
+        return {
+            "status": "ERROR", 
+            "message": str(e),
+            "database": "disconnected"
+        }
 
 # ---------- AUTH ----------
 
 @app.post("/api/auth/register")
 async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     try:
+        print(f"📝 Registering user: {user_data.username}")
+        
         # Check if username exists
         existing = db.query(User).filter(User.username == user_data.username).first()
         if existing:
@@ -150,23 +242,33 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
         user = User(username=user_data.username)
         db.add(user)
         db.commit()
+        db.refresh(user)
         
+        print(f"✅ User registered: {user_data.username}")
         return {"success": True, "username": user_data.username}
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Register error: {str(e)}")
+        print(f"❌ Register error: {str(e)}")
+        db.rollback()
         raise HTTPException(500, f"Registration failed: {str(e)}")
 
 @app.post("/api/auth/login")
 async def login(user_data: UserCreate, db: Session = Depends(get_db)):
     try:
+        print(f"🔑 Login attempt: {user_data.username}")
+        
         # Check if user exists
         user = db.query(User).filter(User.username == user_data.username).first()
         if not user:
-            raise HTTPException(401, "User not found")
+            raise HTTPException(401, "User not found - please register first")
         
+        print(f"✅ User logged in: {user_data.username}")
         return {"success": True, "username": user_data.username}
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Login error: {str(e)}")
+        print(f"❌ Login error: {str(e)}")
         raise HTTPException(500, f"Login failed: {str(e)}")
 
 @app.get("/api/auth/me")
@@ -177,7 +279,7 @@ async def get_me(username: str = Query(...), db: Session = Depends(get_db)):
             raise HTTPException(404, "User not found")
         return {"username": user.username, "created_at": user.created_at}
     except Exception as e:
-        print(f"Get me error: {str(e)}")
+        print(f"❌ Get me error: {str(e)}")
         raise HTTPException(500, f"Failed to get user: {str(e)}")
 
 # ---------- YOUTUBE MUSIC ----------
@@ -212,7 +314,7 @@ async def get_trending():
         
         return results
     except Exception as e:
-        print(f"Trending error: {str(e)}")
+        print(f"❌ Trending error: {str(e)}")
         return []
 
 @app.get("/api/search")
@@ -240,7 +342,7 @@ async def search_songs(q: str = Query(..., min_length=1)):
         
         return songs
     except Exception as e:
-        print(f"Search error: {str(e)}")
+        print(f"❌ Search error: {str(e)}")
         return []
 
 # ---------- FAVORITES ----------
@@ -248,6 +350,8 @@ async def search_songs(q: str = Query(..., min_length=1)):
 @app.post("/api/favorites")
 async def add_favorite(song: FavoriteCreate, db: Session = Depends(get_db)):
     try:
+        print(f"❤️ Adding favorite: {song.username} - {song.title}")
+        
         # Check if already favorited
         existing = db.query(Favorite).filter(
             Favorite.username == song.username,
@@ -268,10 +372,13 @@ async def add_favorite(song: FavoriteCreate, db: Session = Depends(get_db)):
         )
         db.add(favorite)
         db.commit()
+        db.refresh(favorite)
         
+        print(f"✅ Favorite added: {song.username} - {song.title}")
         return {"message": "Added to favorites", "favorited": True}
     except Exception as e:
-        print(f"Add favorite error: {str(e)}")
+        print(f"❌ Add favorite error: {str(e)}")
+        db.rollback()
         raise HTTPException(500, f"Failed to add favorite: {str(e)}")
 
 @app.delete("/api/favorites/{song_id}")
@@ -281,6 +388,8 @@ async def remove_favorite(
     db: Session = Depends(get_db)
 ):
     try:
+        print(f"🗑️ Removing favorite: {username} - {song_id}")
+        
         result = db.query(Favorite).filter(
             Favorite.username == username,
             Favorite.song_id == song_id
@@ -288,11 +397,15 @@ async def remove_favorite(
         db.commit()
         
         if result:
+            print(f"✅ Favorite removed: {username} - {song_id}")
             return {"message": "Removed from favorites", "favorited": False}
         else:
             raise HTTPException(404, "Song not found in favorites")
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Remove favorite error: {str(e)}")
+        print(f"❌ Remove favorite error: {str(e)}")
+        db.rollback()
         raise HTTPException(500, f"Failed to remove favorite: {str(e)}")
 
 @app.get("/api/favorites")
@@ -301,13 +414,17 @@ async def get_favorites(
     db: Session = Depends(get_db)
 ):
     try:
+        print(f"📋 Getting favorites for: {username}")
+        
         favorites = db.query(Favorite).filter(
             Favorite.username == username
         ).order_by(Favorite.added_at.desc()).all()
         
-        return [FavoriteResponse.model_validate(f) for f in favorites]
+        result = [FavoriteResponse.model_validate(f) for f in favorites]
+        print(f"✅ Found {len(result)} favorites for {username}")
+        return result
     except Exception as e:
-        print(f"Get favorites error: {str(e)}")
+        print(f"❌ Get favorites error: {str(e)}")
         raise HTTPException(500, f"Failed to get favorites: {str(e)}")
 
 @app.get("/api/favorites/check/{song_id}")
@@ -324,7 +441,7 @@ async def check_favorite(
         
         return {"isFavorited": favorite is not None}
     except Exception as e:
-        print(f"Check favorite error: {str(e)}")
+        print(f"❌ Check favorite error: {str(e)}")
         raise HTTPException(500, f"Failed to check favorite: {str(e)}")
 
 # ============================================

@@ -1040,6 +1040,7 @@ async function handleAuth() {
             fetchTrending();
             showToast(`Welcome, ${currentUser.username} ✦`, 'success');
             console.log('✅ User logged in:', currentUser.username);
+            console.log('🔑 Token:', token.substring(0, 20) + '...');
         } else {
             errorDiv.textContent = data.detail || 'Authentication failed';
         }
@@ -1277,9 +1278,12 @@ function renderTracks(tracks, target) {
     // Store tracks for playlist
     window._currentTrackList = tracks;
     
-    // Check favorites if user is logged in
+    // Check favorites if user is logged in - DELAY this to ensure token is set
     if (currentUser && token) {
-        tracks.forEach(s => checkFavorite(s.id));
+        // Use setTimeout to ensure this runs after the render is complete
+        setTimeout(() => {
+            tracks.forEach(s => checkFavorite(s.id));
+        }, 100);
     }
 }
 
@@ -1377,7 +1381,10 @@ async function toggleFavorite(songId, title, artist, thumbnail) {
 }
 
 async function checkFavorite(songId) {
-    if (!currentUser || !token) return;
+    if (!currentUser || !token) {
+        console.log('⚠️ Skipping checkFavorite - not logged in');
+        return;
+    }
     
     try {
         const headers = getAuthHeaders();
@@ -1393,6 +1400,7 @@ async function checkFavorite(songId) {
             localStorage.removeItem('vofo_token');
             token = null;
             currentUser = null;
+            console.log('⚠️ Token expired during checkFavorite');
             return;
         }
         

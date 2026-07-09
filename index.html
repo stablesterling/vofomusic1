@@ -6,7 +6,6 @@
     <title>VoFo Music | Private Listening</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
     <style>
-        /* ... keep all your existing CSS ... */
         :root { 
             --bg: #0a0a0a; 
             --gold: #c5a367; 
@@ -788,8 +787,8 @@
             <div class="vofo-logo">VoFo</div>
             <div class="auth-sub">HIGH-FIDELITY · NO ADS · NO TRACKING</div>
         </div>
-        <input type="text" id="lUser" placeholder="IDENTITY" autocomplete="username">
-        <input type="password" id="lPass" placeholder="ENCRYPTION" autocomplete="current-password">
+        <input type="text" id="lUser" placeholder="USERNAME" autocomplete="username">
+        <input type="text" id="lPass" placeholder="PASSWORD (optional)" autocomplete="current-password">
         <div id="authError" class="auth-error"></div>
         <button class="auth-btn" onclick="handleAuth()">Initialize</button>
         <p class="auth-switch" onclick="toggleAuth()">CREATE ACCOUNT</p>
@@ -889,7 +888,6 @@ const BACKEND_URL = window.location.hostname === 'localhost' || window.location.
 
 let player = null;
 let currentUser = null;
-let token = null;
 let isLoginMode = true;
 let currentPlaylist = [];
 let currentIndex = -1;
@@ -915,21 +913,19 @@ function showToast(message, type = 'info') {
 // ============================================
 window.onload = () => {
     const savedUser = localStorage.getItem('vofo_user');
-    const savedToken = localStorage.getItem('vofo_token');
     
-    if (savedUser && savedToken) {
+    if (savedUser) {
         try {
             currentUser = JSON.parse(savedUser);
-            token = savedToken;
-            // Don't auto-login - let user login manually to ensure fresh token
-            console.log('📦 Found saved session, but requiring manual login for security');
-            localStorage.removeItem('vofo_user');
-            localStorage.removeItem('vofo_token');
-            token = null;
-            currentUser = null;
+            console.log('📦 Found saved session for user:', currentUser.username);
+            showLoginAnimation().then(() => {
+                document.getElementById('authScreen').classList.add('hidden');
+                document.getElementById('app').classList.remove('hidden');
+                fetchTrending();
+            });
         } catch (e) {
             localStorage.removeItem('vofo_user');
-            localStorage.removeItem('vofo_token');
+            currentUser = null;
         }
     }
 };
@@ -993,16 +989,16 @@ function onYouTubeIframeAPIReady() {
 }
 
 // ============================================
-// AUTHENTICATION
+// AUTHENTICATION (Simplified - No JWT)
 // ============================================
 async function handleAuth() {
     const u = document.getElementById('lUser').value.trim();
-    const p = document.getElementById('lPass').value;
+    const p = document.getElementById('lPass').value.trim();
     const authBtn = document.querySelector('.auth-btn');
     const errorDiv = document.getElementById('authError');
     
-    if(!u || !p) {
-        errorDiv.textContent = 'Please fill in all fields';
+    if(!u) {
+        errorDiv.textContent = 'Please enter a username';
         return;
     }
     errorDiv.textContent = '';
@@ -1012,9 +1008,7 @@ async function handleAuth() {
     
     try {
         const endpoint = isLoginMode ? '/auth/login' : '/auth/register';
-        const body = isLoginMode 
-            ? { username: u, password: p }
-            : { username: u, email: u, password: p };
+        const body = { username: u };
 
         const response = await fetch(`${BACKEND_URL}${endpoint}`, {
             method: 'POST',
@@ -1025,11 +1019,8 @@ async function handleAuth() {
         const data = await response.json();
         
         if (response.ok) {
-            token = data.access_token;
-            currentUser = data.user;
-            
+            currentUser = { username: u };
             localStorage.setItem('vofo_user', JSON.stringify(currentUser));
-            localStorage.setItem('vofo_token', token);
             
             document.getElementById('authScreen').style.opacity = '0';
             await new Promise(resolve => setTimeout(resolve, 500));
@@ -1040,7 +1031,6 @@ async function handleAuth() {
             fetchTrending();
             showToast(`Welcome, ${currentUser.username} ✦`, 'success');
             console.log('✅ User logged in:', currentUser.username);
-            console.log('🔑 Token:', token.substring(0, 20) + '...');
         } else {
             errorDiv.textContent = data.detail || 'Authentication failed';
         }
@@ -1071,8 +1061,6 @@ function handleLogout() {
     document.getElementById('app').style.opacity = '0';
     setTimeout(() => {
         localStorage.removeItem('vofo_user');
-        localStorage.removeItem('vofo_token');
-        token = null;
         currentUser = null;
         location.reload();
     }, 500);
@@ -1278,9 +1266,8 @@ function renderTracks(tracks, target) {
     // Store tracks for playlist
     window._currentTrackList = tracks;
     
-    // Check favorites if user is logged in - DELAY this to ensure token is set
-    if (currentUser && token) {
-        // Use setTimeout to ensure this runs after the render is complete
+    // Check favorites if user is logged in
+    if (currentUser) {
         setTimeout(() => {
             tracks.forEach(s => checkFavorite(s.id));
         }, 100);
@@ -1302,22 +1289,10 @@ function escapeHtml(text) {
 }
 
 // ============================================
-// FAVORITES - COMPLETELY FIXED
+// FAVORITES (Simplified - No JWT)
 // ============================================
-function getAuthHeaders() {
-    if (!token) {
-        console.error('❌ No token available');
-        return null;
-    }
-    return {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-    };
-}
-
 async function toggleFavorite(songId, title, artist, thumbnail) {
-    // Check authentication FIRST
-    if (!currentUser || !token) {
+    if (!currentUser) {
         showToast('Please login to favorite songs', 'error');
         return;
     }
@@ -1328,16 +1303,15 @@ async function toggleFavorite(songId, title, artist, thumbnail) {
     const isFav = btn.classList.contains('liked');
     
     try {
-        const headers = getAuthHeaders();
-        if (!headers) {
-            showToast('Not authenticated', 'error');
-            return;
-        }
+        const url = isFav 
+            ? `${BACKEND_URL}/favorites/${songId}?username=${encodeURIComponent(currentUser.username)}`
+            : `${BACKEND_URL}/favorites`;
         
-        const response = await fetch(`${BACKEND_URL}/favorites${isFav ? `/${songId}` : ''}`, {
+        const response = await fetch(url, {
             method: isFav ? 'DELETE' : 'POST',
-            headers: headers,
+            headers: {'Content-Type': 'application/json'},
             body: isFav ? null : JSON.stringify({ 
+                username: currentUser.username,
                 song_id: songId, 
                 title: title, 
                 artist: artist,
@@ -1345,28 +1319,15 @@ async function toggleFavorite(songId, title, artist, thumbnail) {
             })
         });
 
-        if (response.status === 401) {
-            // Token expired - clear and reload
-            localStorage.removeItem('vofo_user');
-            localStorage.removeItem('vofo_token');
-            token = null;
-            currentUser = null;
-            showToast('Session expired. Please login again.', 'error');
-            setTimeout(() => location.reload(), 2000);
-            return;
-        }
-
         if (response.ok) {
             btn.classList.toggle('liked');
             btn.textContent = btn.classList.contains('liked') ? '♥' : '♡';
             showToast(isFav ? 'Removed from favorites' : 'Added to favorites ♥', 'success');
             
-            // Refresh library if open
             if (!document.getElementById('libraryTab').classList.contains('hidden')) {
                 await fetchLiked();
             }
             
-            // Update current song like button
             if (currentSongData && currentSongData.id === songId) {
                 document.getElementById('likeBtn').classList.toggle('liked');
             }
@@ -1381,29 +1342,10 @@ async function toggleFavorite(songId, title, artist, thumbnail) {
 }
 
 async function checkFavorite(songId) {
-    if (!currentUser || !token) {
-        console.log('⚠️ Skipping checkFavorite - not logged in');
-        return;
-    }
+    if (!currentUser) return;
     
     try {
-        const headers = getAuthHeaders();
-        if (!headers) return;
-        
-        const response = await fetch(`${BACKEND_URL}/favorites/check/${songId}`, {
-            headers: headers
-        });
-        
-        if (response.status === 401) {
-            // Token expired - clear silently
-            localStorage.removeItem('vofo_user');
-            localStorage.removeItem('vofo_token');
-            token = null;
-            currentUser = null;
-            console.log('⚠️ Token expired during checkFavorite');
-            return;
-        }
-        
+        const response = await fetch(`${BACKEND_URL}/favorites/check/${songId}?username=${encodeURIComponent(currentUser.username)}`);
         const data = await response.json();
         const btn = document.getElementById(`fav_${songId}`);
         if (btn && data.isFavorited) {
@@ -1416,8 +1358,7 @@ async function checkFavorite(songId) {
 }
 
 async function toggleLikeCurrent() {
-    // Check authentication FIRST
-    if (!currentUser || !token) {
+    if (!currentUser) {
         showToast('Please login to like songs', 'error');
         return;
     }
@@ -1432,16 +1373,15 @@ async function toggleLikeCurrent() {
     const song = currentSongData;
     
     try {
-        const headers = getAuthHeaders();
-        if (!headers) {
-            showToast('Not authenticated', 'error');
-            return;
-        }
+        const url = isLiked 
+            ? `${BACKEND_URL}/favorites/${song.id}?username=${encodeURIComponent(currentUser.username)}`
+            : `${BACKEND_URL}/favorites`;
         
-        const response = await fetch(`${BACKEND_URL}/favorites${isLiked ? `/${song.id}` : ''}`, {
+        const response = await fetch(url, {
             method: isLiked ? 'DELETE' : 'POST',
-            headers: headers,
+            headers: {'Content-Type': 'application/json'},
             body: isLiked ? null : JSON.stringify({ 
+                username: currentUser.username,
                 song_id: song.id, 
                 title: song.title, 
                 artist: song.artist,
@@ -1449,28 +1389,16 @@ async function toggleLikeCurrent() {
             })
         });
 
-        if (response.status === 401) {
-            localStorage.removeItem('vofo_user');
-            localStorage.removeItem('vofo_token');
-            token = null;
-            currentUser = null;
-            showToast('Session expired. Please login again.', 'error');
-            setTimeout(() => location.reload(), 2000);
-            return;
-        }
-
         if (response.ok) {
             likeBtn.classList.toggle('liked');
             showToast(isLiked ? 'Removed from favorites' : 'Added to favorites ♥', 'success');
             
-            // Update any visible favorite buttons
             const favBtn = document.getElementById(`fav_${song.id}`);
             if (favBtn) {
                 favBtn.classList.toggle('liked');
                 favBtn.textContent = favBtn.classList.contains('liked') ? '♥' : '♡';
             }
             
-            // Refresh library if open
             if (!document.getElementById('libraryTab').classList.contains('hidden')) {
                 await fetchLiked();
             }
@@ -1485,23 +1413,10 @@ async function toggleLikeCurrent() {
 }
 
 async function checkIfLiked(id) {
-    if (!currentUser || !token) return;
+    if (!currentUser) return;
     
     try {
-        const headers = getAuthHeaders();
-        if (!headers) return;
-        
-        const response = await fetch(`${BACKEND_URL}/favorites/check/${id}`, {
-            headers: headers
-        });
-        if (response.status === 401) {
-            // Token expired - clear silently
-            localStorage.removeItem('vofo_user');
-            localStorage.removeItem('vofo_token');
-            token = null;
-            currentUser = null;
-            return;
-        }
+        const response = await fetch(`${BACKEND_URL}/favorites/check/${id}?username=${encodeURIComponent(currentUser.username)}`);
         const data = await response.json();
         document.getElementById('likeBtn').classList.toggle('liked', data.isFavorited || false);
     } catch (error) {
@@ -1510,8 +1425,7 @@ async function checkIfLiked(id) {
 }
 
 async function fetchLiked() {
-    // Check authentication FIRST
-    if (!currentUser || !token) {
+    if (!currentUser) {
         showToast('Please login to see favorites', 'error');
         return;
     }
@@ -1520,38 +1434,7 @@ async function fetchLiked() {
     container.innerHTML = `<div class="loading"><div class="spinner"></div><p>Loading favorites...</p></div>`;
     
     try {
-        const headers = getAuthHeaders();
-        if (!headers) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-icon">🔒</div>
-                    <h3>Not Authenticated</h3>
-                    <p>Please login to view your favorites</p>
-                </div>
-            `;
-            return;
-        }
-        
-        const response = await fetch(`${BACKEND_URL}/favorites`, {
-            headers: headers
-        });
-        
-        if (response.status === 401) {
-            localStorage.removeItem('vofo_user');
-            localStorage.removeItem('vofo_token');
-            token = null;
-            currentUser = null;
-            showToast('Session expired. Please login again.', 'error');
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-icon">🔒</div>
-                    <h3>Session Expired</h3>
-                    <p>Please login again to view your favorites</p>
-                </div>
-            `;
-            setTimeout(() => location.reload(), 2000);
-            return;
-        }
+        const response = await fetch(`${BACKEND_URL}/favorites?username=${encodeURIComponent(currentUser.username)}`);
         
         if (!response.ok) {
             throw new Error('Failed to fetch favorites');

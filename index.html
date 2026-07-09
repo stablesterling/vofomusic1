@@ -512,11 +512,31 @@
         .controls-main { 
             display: flex; 
             align-items: center; 
-            gap: 15px; 
+            gap: 12px; 
         }
         .player.expanded .controls-main { 
-            gap: 30px; 
+            gap: 25px; 
             transform: scale(1.3); 
+        }
+        
+        .controls-main button {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 5px;
+            transition: 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .controls-main button:hover {
+            color: var(--gold);
+            transform: scale(1.1);
+        }
+        .controls-main button.active {
+            color: var(--gold);
         }
         
         .play-trigger { 
@@ -865,15 +885,20 @@
 
     <div class="player-center" style="display:flex; flex-direction:column; align-items:center; width:100%;">
         <div class="controls-main">
-            <button style="background:none; border:none; color:white; font-size:20px; cursor:pointer;" onclick="event.stopPropagation(); skipPrev()">⏮</button>
+            <button onclick="event.stopPropagation(); toggleShuffle()" id="shuffleBtn" title="Shuffle">🔀</button>
+            <button onclick="event.stopPropagation(); skipPrev()">⏮</button>
             <button class="play-trigger" id="playBtn" onclick="event.stopPropagation(); togglePlay()">▶</button>
-            <button style="background:none; border:none; color:white; font-size:20px; cursor:pointer;" onclick="event.stopPropagation(); skipNext()">⏭</button>
-            <button id="likeBtn" onclick="event.stopPropagation(); toggleLikeCurrent()">❤</button>
+            <button onclick="event.stopPropagation(); skipNext()">⏭</button>
+            <button onclick="event.stopPropagation(); toggleRepeat()" id="repeatBtn" title="Repeat">🔁</button>
         </div>
         <div class="progress-container">
             <span id="curTime">0:00</span>
             <input type="range" id="progress" value="0" step="1" onclick="event.stopPropagation()" oninput="seek(this.value)">
             <span id="durTime">0:00</span>
+        </div>
+        <div style="display:flex; gap:20px; margin-top:10px; align-items:center;">
+            <button id="likeBtn" onclick="event.stopPropagation(); toggleLikeCurrent()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--muted);">❤</button>
+            <span style="font-size:11px; color:var(--muted);" id="playlistInfo">0 / 0</span>
         </div>
     </div>
 </div>
@@ -893,6 +918,14 @@ let currentPlaylist = [];
 let currentIndex = -1;
 let isPlaying = false;
 let currentSongData = null;
+
+// ============================================
+// AUTO MIX FEATURES
+// ============================================
+let repeatMode = 'none'; // 'none', 'all', 'one'
+let isShuffled = false;
+let shuffledIndices = [];
+let currentShuffleIndex = -1;
 
 // ============================================
 // TOAST NOTIFICATIONS
@@ -977,11 +1010,14 @@ function onYouTubeIframeAPIReady() {
                     isPlaying = false;
                     playBtn.innerText = "▶";
                     silentAudio.pause();
-                    skipNext();
+                    // Auto play next song
+                    handleSongEnd();
                 }
             },
             onError: () => {
                 showToast('⚠️ Unable to play this track', 'error');
+                // Try to play next on error
+                setTimeout(handleSongEnd, 3000);
             }
         }
     });
@@ -989,7 +1025,124 @@ function onYouTubeIframeAPIReady() {
 }
 
 // ============================================
-// AUTHENTICATION (With Password)
+// AUTO MIX: HANDLE SONG END// ============================================
+function handleSongEnd() {
+    if (repeatMode === 'one') {
+        // Repeat current song
+        playSong(currentIndex);
+        return;
+    }
+    
+    // Get next index
+    let nextIndex = getNextIndex();
+    
+    if (nextIndex === -1) {
+        // End of playlist
+        if (repeatMode === 'all') {
+            // Start from beginning
+            nextIndex = 0;
+        } else {
+            showToast('Playlist ended', 'info');
+            return;
+        }
+    }
+    
+    if (nextIndex >= 0 && nextIndex < currentPlaylist.length) {
+        playSong(nextIndex);
+    }
+}
+
+function getNextIndex() {
+    if (currentPlaylist.length === 0) return -1;
+    
+    if (isShuffled) {
+        // Get next shuffled index
+        if (currentShuffleIndex < shuffledIndices.length - 1) {
+            return shuffledIndices[currentShuffleIndex + 1];
+        }
+        return -1;
+    } else {
+        // Normal sequential
+        return currentIndex + 1;
+    }
+}
+
+function getPrevIndex() {
+    if (currentPlaylist.length === 0) return -1;
+    
+    if (isShuffled) {
+        if (currentShuffleIndex > 0) {
+            return shuffledIndices[currentShuffleIndex - 1];
+        }
+        return -1;
+    } else {
+        return currentIndex - 1;
+    }
+}
+
+// ============================================
+// SHUFFLE
+// ============================================
+function toggleShuffle() {
+    isShuffled = !isShuffled;
+    const btn = document.getElementById('shuffleBtn');
+    btn.classList.toggle('active', isShuffled);
+    btn.style.color = isShuffled ? 'var(--gold)' : 'white';
+    
+    if (isShuffled) {
+        // Create shuffled order
+        shuffledIndices = Array.from({length: currentPlaylist.length}, (_, i) => i);
+        // Fisher-Yates shuffle
+        for (let i = shuffledIndices.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffledIndices[i], shuffledIndices[j]] = [shuffledIndices[j], shuffledIndices[i]];
+        }
+        // Find current song in shuffled order
+        const currentSongId = currentPlaylist[currentIndex]?.id;
+        if (currentSongId) {
+            // If a song is playing, find it in shuffled array
+            for (let i = 0; i < shuffledIndices.length; i++) {
+                if (currentPlaylist[shuffledIndices[i]]?.id === currentSongId) {
+                    currentShuffleIndex = i;
+                    break;
+                }
+            }
+        }
+        showToast('🔀 Shuffle on', 'info');
+    } else {
+        currentShuffleIndex = -1;
+        showToast('🔀 Shuffle off', 'info');
+    }
+}
+
+// ============================================
+// REPEAT
+// ============================================
+function toggleRepeat() {
+    const modes = ['none', 'all', 'one'];
+    const currentIndex = modes.indexOf(repeatMode);
+    repeatMode = modes[(currentIndex + 1) % modes.length];
+    
+    const btn = document.getElementById('repeatBtn');
+    const icons = {
+        'none': '🔁',
+        'all': '🔁',
+        'one': '🔂'
+    };
+    btn.textContent = icons[repeatMode];
+    btn.classList.toggle('active', repeatMode !== 'none');
+    btn.style.color = repeatMode !== 'none' ? 'var(--gold)' : 'white';
+    
+    const messages = {
+        'none': 'Repeat off',
+        'all': 'Repeat all',
+        'one': 'Repeat one'
+    };
+    showToast(messages[repeatMode], 'info');
+}
+
+// ============================================
+// AUTHENTICATION
 // ============================================
 async function handleAuth() {
     const u = document.getElementById('lUser').value.trim();
@@ -1086,9 +1239,17 @@ function playSong(index) {
         return;
     }
     
+    if (index < 0 || index >= currentPlaylist.length) {
+        showToast('End of playlist', 'info');
+        return;
+    }
+    
     currentIndex = index;
     const song = currentPlaylist[index];
     currentSongData = song;
+    
+    // Update playlist info
+    document.getElementById('playlistInfo').textContent = `${index + 1} / ${currentPlaylist.length}`;
     
     document.getElementById('playerBar').classList.remove('hidden');
     document.getElementById('pTitle').innerText = song.title;
@@ -1123,16 +1284,32 @@ function togglePlay() {
 }
 
 function skipNext() {
-    if (currentIndex < currentPlaylist.length - 1) {
-        playSong(currentIndex + 1);
+    if (repeatMode === 'one') {
+        playSong(currentIndex);
+        return;
+    }
+    
+    let nextIndex = getNextIndex();
+    if (nextIndex === -1 && repeatMode === 'all') {
+        nextIndex = 0;
+    }
+    
+    if (nextIndex >= 0 && nextIndex < currentPlaylist.length) {
+        playSong(nextIndex);
     } else {
         showToast('End of playlist', 'info');
     }
 }
 
 function skipPrev() {
-    if (currentIndex > 0) {
-        playSong(currentIndex - 1);
+    if (currentIndex <= 0 && !isShuffled) {
+        showToast('Beginning of playlist', 'info');
+        return;
+    }
+    
+    let prevIndex = getPrevIndex();
+    if (prevIndex >= 0 && prevIndex < currentPlaylist.length) {
+        playSong(prevIndex);
     } else {
         showToast('Beginning of playlist', 'info');
     }
@@ -1286,7 +1463,14 @@ function renderTracks(tracks, target) {
 function startPlaylist(index) {
     const tracks = window._currentTrackList || [];
     if (tracks.length === 0) return;
+    
     currentPlaylist = tracks;
+    currentIndex = index;
+    currentShuffleIndex = -1;
+    isShuffled = false;
+    document.getElementById('shuffleBtn').classList.remove('active');
+    document.getElementById('shuffleBtn').style.color = 'white';
+    
     playSong(index);
 }
 
@@ -1298,7 +1482,7 @@ function escapeHtml(text) {
 }
 
 // ============================================
-// FAVORITES (With Username-based Auth)
+// FAVORITES
 // ============================================
 async function toggleFavorite(songId, title, artist, thumbnail) {
     if (!currentUser) {
@@ -1534,6 +1718,7 @@ firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 console.log('✦ VoFo Music Experience');
 console.log('🎵 Backend: ' + BACKEND_URL);
 console.log('👤 User: ' + (currentUser ? currentUser.username : 'Not logged in'));
+console.log('🔀 Auto Mix features enabled');
 </script>
 </body>
 </html>

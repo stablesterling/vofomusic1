@@ -1,5 +1,5 @@
 """
-🎵 VOFO Music - Python Backend (Simplified - No JWT)
+🎵 VOFO Music - Python Backend (With Password Authentication)
 """
 
 import os
@@ -14,6 +14,7 @@ from ytmusicapi import YTMusic
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import time
+import bcrypt
 
 # ============================================
 # CONFIGURATION
@@ -57,6 +58,7 @@ class User(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(100), unique=True, index=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -74,7 +76,7 @@ class Favorite(Base):
 
 
 # ============================================
-# DATABASE MIGRATION - FIXED
+# DATABASE MIGRATION
 # ============================================
 def migrate_database():
     """Check and fix database schema"""
@@ -88,7 +90,6 @@ def migrate_database():
         if "favorites" in existing_tables:
             print("🔄 Dropping existing favorites table to fix schema...")
             with engine.connect() as conn:
-                # Disable foreign key checks for PostgreSQL
                 if DATABASE_URL.startswith("postgresql"):
                     conn.execute(text("DROP TABLE IF EXISTS favorites CASCADE"))
                 else:
@@ -121,22 +122,26 @@ def migrate_database():
             columns = inspector.get_columns("favorites")
             col_names = [c['name'] for c in columns]
             print(f"📊 Favorites columns: {col_names}")
+        
+        # Check columns in users table
+        if "users" in tables:
+            columns = inspector.get_columns("users")
+            col_names = [c['name'] for c in columns]
+            print(f"📊 Users columns: {col_names}")
             
-            if "username" not in col_names:
-                print("❌ CRITICAL: username column missing! Adding it...")
+            if "password_hash" not in col_names:
+                print("❌ CRITICAL: password_hash column missing! Adding it...")
                 with engine.connect() as conn:
                     if DATABASE_URL.startswith("postgresql"):
-                        conn.execute(text("ALTER TABLE favorites ADD COLUMN username VARCHAR(100)"))
-                        conn.execute(text("CREATE INDEX idx_favorites_username ON favorites(username)"))
+                        conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
                     else:
-                        conn.execute(text("ALTER TABLE favorites ADD COLUMN username VARCHAR(100)"))
+                        conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
                     conn.commit()
-                print("✅ Added username column to favorites table")
+                print("✅ Added password_hash column to users table")
         
         return True
     except Exception as e:
         print(f"❌ Migration error: {str(e)}")
-        # Force create tables
         try:
             Base.metadata.create_all(bind=engine)
             print("✅ Tables created via fallback")
@@ -155,7 +160,19 @@ print("✅ Database ready")
 # ============================================
 
 class UserCreate(BaseModel):
-    username: str = Field(..., min_length=1, max_length=50)
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=4)
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class UserResponse(BaseModel):
+    username: str
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
 
 class FavoriteCreate(BaseModel):
     username: str
@@ -176,6 +193,19 @@ class FavoriteResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+# ============================================
+# PASSWORD FUNCTIONS
+# ============================================
+
+def hash_password(password: str) -> str:
+    """Hash a password using bcrypt"""
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+
+def verify_password(password: str, hashed: str) -> bool:
+    """Verify a password against its hash"""
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
 # ============================================
 # DATABASE FUNCTIONS
@@ -226,7 +256,7 @@ async def health_check(db: Session = Depends(get_db)):
             "database": "disconnected"
         }
 
-# ---------- AUTH ----------
+# ---------- AUTH (With Password) ----------
 
 @app.post("/api/auth/register")
 async def register(user_data: UserCreate, db: Session = Depends(get_db)):
@@ -238,14 +268,22 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
         if existing:
             raise HTTPException(400, "Username already taken")
         
-        # Create user
-        user = User(username=user_data.username)
+        # Hash password and create user
+        hashed_password = hash_password(user_data.password)
+        user = User(
+            username=user_data.username,
+            password_hash=hashed_password
+        )
         db.add(user)
         db.commit()
         db.refresh(user)
         
         print(f"✅ User registered: {user_data.username}")
-        return {"success": True, "username": user_data.username}
+        return {
+            "success": True, 
+            "username": user_data.username,
+            "message": "Registration successful"
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -254,17 +292,25 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(500, f"Registration failed: {str(e)}")
 
 @app.post("/api/auth/login")
-async def login(user_data: UserCreate, db: Session = Depends(get_db)):
+async def login(user_data: UserLogin, db: Session = Depends(get_db)):
     try:
         print(f"🔑 Login attempt: {user_data.username}")
         
-        # Check if user exists
+        # Find user
         user = db.query(User).filter(User.username == user_data.username).first()
         if not user:
-            raise HTTPException(401, "User not found - please register first")
+            raise HTTPException(401, "Invalid username or password")
+        
+        # Verify password
+        if not verify_password(user_data.password, user.password_hash):
+            raise HTTPException(401, "Invalid username or password")
         
         print(f"✅ User logged in: {user_data.username}")
-        return {"success": True, "username": user_data.username}
+        return {
+            "success": True, 
+            "username": user_data.username,
+            "message": "Login successful"
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -277,7 +323,10 @@ async def get_me(username: str = Query(...), db: Session = Depends(get_db)):
         user = db.query(User).filter(User.username == username).first()
         if not user:
             raise HTTPException(404, "User not found")
-        return {"username": user.username, "created_at": user.created_at}
+        return {
+            "username": user.username, 
+            "created_at": user.created_at
+        }
     except Exception as e:
         print(f"❌ Get me error: {str(e)}")
         raise HTTPException(500, f"Failed to get user: {str(e)}")
@@ -352,6 +401,11 @@ async def add_favorite(song: FavoriteCreate, db: Session = Depends(get_db)):
     try:
         print(f"❤️ Adding favorite: {song.username} - {song.title}")
         
+        # Verify user exists
+        user = db.query(User).filter(User.username == song.username).first()
+        if not user:
+            raise HTTPException(404, "User not found")
+        
         # Check if already favorited
         existing = db.query(Favorite).filter(
             Favorite.username == song.username,
@@ -376,6 +430,8 @@ async def add_favorite(song: FavoriteCreate, db: Session = Depends(get_db)):
         
         print(f"✅ Favorite added: {song.username} - {song.title}")
         return {"message": "Added to favorites", "favorited": True}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ Add favorite error: {str(e)}")
         db.rollback()
@@ -389,6 +445,11 @@ async def remove_favorite(
 ):
     try:
         print(f"🗑️ Removing favorite: {username} - {song_id}")
+        
+        # Verify user exists
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            raise HTTPException(404, "User not found")
         
         result = db.query(Favorite).filter(
             Favorite.username == username,
@@ -416,6 +477,11 @@ async def get_favorites(
     try:
         print(f"📋 Getting favorites for: {username}")
         
+        # Verify user exists
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            raise HTTPException(404, "User not found")
+        
         favorites = db.query(Favorite).filter(
             Favorite.username == username
         ).order_by(Favorite.added_at.desc()).all()
@@ -423,6 +489,8 @@ async def get_favorites(
         result = [FavoriteResponse.model_validate(f) for f in favorites]
         print(f"✅ Found {len(result)} favorites for {username}")
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ Get favorites error: {str(e)}")
         raise HTTPException(500, f"Failed to get favorites: {str(e)}")
@@ -434,6 +502,11 @@ async def check_favorite(
     db: Session = Depends(get_db)
 ):
     try:
+        # Verify user exists
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            return {"isFavorited": False}
+        
         favorite = db.query(Favorite).filter(
             Favorite.username == username,
             Favorite.song_id == song_id
@@ -442,7 +515,7 @@ async def check_favorite(
         return {"isFavorited": favorite is not None}
     except Exception as e:
         print(f"❌ Check favorite error: {str(e)}")
-        raise HTTPException(500, f"Failed to check favorite: {str(e)}")
+        return {"isFavorited": False}
 
 # ============================================
 # SERVE FRONTEND
